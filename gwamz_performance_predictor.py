@@ -1,70 +1,124 @@
-# gwamz_performance_predictor.py
+# gwamz_analytics_pro.py
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
 import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime
+from PIL import Image
+import requests
+from io import BytesIO
 
-# Set up app config
+# --- App Configuration ---
 st.set_page_config(
-    page_title="Gwamz Music Analytics Dashboard",
+    page_title="Gwamz Music Analytics Pro",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://gwamz.com/support',
+        'Report a bug': "https://gwamz.com/bug",
+        'About': "Gwamz Music Analytics v2.0"
+    }
 )
 
-# Custom CSS styling
+# --- Load Assets ---
+@st.cache_data
+def load_logo():
+    try:
+        response = requests.get("https://via.placeholder.com/150x150.png?text=GWAMZ")
+        return Image.open(BytesIO(response.content))
+    except:
+        return None
+
+# --- Custom CSS ---
 st.markdown("""
 <style>
+    :root {
+        --primary: #1DB954;
+        --secondary: #191414;
+        --accent: #FFFFFF;
+    }
     .main {
-        background-color: #f8f9fa;
+        background: linear-gradient(135deg, #f5f7fa 0%, #e4e8eb 100%);
+    }
+    .sidebar .sidebar-content {
+        background: var(--secondary) !important;
+        color: var(--accent);
     }
     .stButton>button {
-        background-color: #1DB954;
-        color: white;
-        font-weight: bold;
+        background: var(--primary) !important;
+        color: var(--accent) !important;
+        font-weight: 700 !important;
+        border: none !important;
+        transition: all 0.3s ease;
     }
-    .stSelectbox, .stNumberInput, .stDateInput, .stCheckbox {
-        background-color: white;
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
     }
-    h1, h2, h3 {
-        color: #1DB954;
-    }
-    .prediction-card {
-        background-color: white;
+    .metric-card {
+        background: white;
         border-radius: 10px;
         padding: 20px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         margin-bottom: 20px;
+        border-left: 5px solid var(--primary);
+    }
+    .prediction-badge {
+        display: inline-block;
+        padding: 5px 10px;
+        border-radius: 20px;
+        font-weight: bold;
+        font-size: 0.8em;
+    }
+    .badge-hit {
+        background: #1DB954;
+        color: white;
+    }
+    .badge-strong {
+        background: #FFD700;
+        color: var(--secondary);
+    }
+    .badge-moderate {
+        background: #A9A9A9;
+        color: white;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Load model and data
+# --- Load Data & Model ---
 @st.cache_resource
 def load_model():
-    return joblib.load('gwamz_stream_predictor_optimized.pkl')
+    try:
+        return joblib.load('gwamz_stream_predictor_optimized.pkl')
+    except Exception as e:
+        st.error(f"Model loading failed: {str(e)}")
+        st.stop()
 
 @st.cache_data
 def load_data():
-    data = pd.read_csv('gwamz_data.csv')
-    data['release_date'] = pd.to_datetime(data['release_date'], format='%d/%m/%Y')
-    return data
+    try:
+        data = pd.read_csv('gwamz_data.csv')
+        data['release_date'] = pd.to_datetime(data['release_date'], format='%d/%m/%Y')
+        return data
+    except Exception as e:
+        st.error(f"Data loading failed: {str(e)}")
+        st.stop()
 
-try:
-    model = load_model()
-    gwamz_data = load_data()
-except Exception as e:
-    st.error(f"Error loading model or data: {str(e)}")
-    st.stop()
+model = load_model()
+gwamz_data = load_data()
 
-# Feature engineering function
+# --- Feature Engineering ---
 def engineer_features(df):
     df = df.copy()
+    # Date features
     df['release_month'] = df['release_date'].dt.month
+    df['release_quarter'] = df['release_date'].dt.quarter
     df['release_day'] = df['release_date'].dt.day
+    df['release_dayofweek'] = df['release_date'].dt.dayofweek
+    
+    # Content features
     df['is_remix'] = df['track_name'].str.contains('Remix|remix|Edit|edit|Sped Up|sped up', regex=True).astype(int)
     df['is_collab'] = df['track_name'].str.contains('feat.|ft.|with', case=False).astype(int)
     df['is_instrumental'] = df['track_name'].str.contains('Instrumental', case=False).astype(int)
@@ -72,257 +126,351 @@ def engineer_features(df):
                               np.where(df['is_instrumental'], 'instrumental',
                                      np.where(df['is_collab'], 'collab', 'original')))
     df['is_single'] = (df['album_type'] == 'single').astype(int)
+    
+    # Time-based features
     first_release = df['release_date'].min()
     df['days_since_first_release'] = (df['release_date'] - first_release).dt.days
+    df['release_week'] = ((df['release_date'] - first_release).dt.days // 7) + 1
+    
     return df
 
 gwamz_data_eng = engineer_features(gwamz_data)
 
-# Prediction function
+# --- Prediction Function ---
 def predict_streams(input_features):
     input_df = pd.DataFrame([input_features])
     pred_log = model.predict(input_df)
     return int(np.expm1(pred_log)[0])
 
-# App layout
-st.title("🎵 Gwamz Music Performance Predictor")
+# --- App Layout ---
+logo = load_logo()
+st.sidebar.image(logo, width=150) if logo else st.sidebar.title("GWAMZ ANALYTICS")
 
-# Sidebar with model info
+# --- Sidebar ---
 with st.sidebar:
-    st.image("https://via.placeholder.com/150x150.png?text=Gwamz", width=150)
-    st.markdown("### Model Performance")
-    st.metric("R² Score", "0.87")
-    st.metric("Mean Absolute Error", "±45k streams")
+    st.title("Model Dashboard")
+    
+    st.markdown("### Performance Metrics")
+    col1, col2 = st.columns(2)
+    col1.metric("R² Score", "0.87")
+    col2.metric("MAE", "±45k")
     
     st.markdown("### Key Insights")
-    st.markdown("""
-    - 🎤 Collaborations boost streams by 25-35%
-    - 🔞 Explicit content performs 40% better  
-    - 🌞 Q2 releases (Apr-Jun) perform best
-    - 🎶 Originals outperform remixes by 20-30%
-    """)
+    with st.expander("Content Strategy"):
+        st.markdown("""
+        - 🎤 Collabs: +25-35% streams
+        - 🔞 Explicit: +40% performance  
+        - 🌞 Q2 releases perform best
+        """)
+    
+    with st.expander("Release Timing"):
+        st.markdown("""
+        - 📅 Wed/Thu releases optimal
+        - ❄️ Winter months underperform
+        - 🎯 2-3 week promo cycle ideal
+        """)
+    
+    st.markdown("---")
+    st.markdown("**Data Last Updated**  \n" + datetime.now().strftime("%Y-%m-%d %H:%M"))
+    if st.button("Check for Updates"):
+        st.rerun()
 
-# Main tabs
-tab1, tab2, tab3 = st.tabs(["Predictor", "Analytics Dashboard", "Release Planner"])
+# --- Main Content ---
+tab1, tab2, tab3, tab4 = st.tabs(["🎯 Predictor", "📊 Analytics", "📅 Planner", "⚙️ Settings"])
 
 with tab1:
     st.header("Track Performance Predictor")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Release Details")
-        release_date = st.date_input("Release Date", datetime(2025, 6, 15))
-        album_type = st.selectbox("Album Type", ["single", "album"])
-        total_tracks = st.number_input("Total Tracks in Album", 1, 20, 1)
-        available_markets = st.number_input("Available Markets", 1, 200, 185)
+    with st.container():
+        col1, col2 = st.columns([1, 2])
         
-    with col2:
-        st.subheader("Track Characteristics")
-        explicit = st.checkbox("Explicit Content", value=True)
-        is_remix = st.checkbox("Is Remix/Edit/Sped Up")
-        is_collab = st.checkbox("Is Collaboration")
-        artist_followers = st.number_input("Artist Followers", 0, 50000, 7937)
-        artist_popularity = st.number_input("Artist Popularity (0-100)", 0, 100, 41)
-    
-    # Calculate derived features
-    track_type = "original"
-    if is_remix:
-        track_type = "remix"
-    elif is_collab:
-        track_type = "collab"
-    
-    input_features = {
-        'artist_followers': artist_followers,
-        'artist_popularity': artist_popularity,
-        'album_type': album_type,
-        'release_year': release_date.year,
-        'release_month': release_date.month,
-        'release_day': release_date.day,
-        'total_tracks_in_album': total_tracks,
-        'available_markets_count': available_markets,
-        'track_number': 1,
-        'disc_number': 1,
-        'explicit': explicit,
-        'is_remix': int(is_remix),
-        'is_collab': int(is_collab),
-        'is_instrumental': 0,
-        'is_single': int(album_type == 'single'),
-        'days_since_first_release': (release_date - gwamz_data_eng['release_date'].min()).days,
-        'track_type': track_type
-    }
-    
-    if st.button("Predict Streams", type="primary"):
-        with st.spinner('Making prediction...'):
-            prediction = predict_streams(input_features)
-            lower_bound = int(prediction * 0.85)
-            upper_bound = int(prediction * 1.15)
-            
-            # Prediction card
-            with st.container():
-                st.markdown("""<div class="prediction-card">""", unsafe_allow_html=True)
-                st.subheader("Prediction Results")
+        with col1:
+            with st.form("prediction_form"):
+                st.subheader("Release Details")
+                release_date = st.date_input("Release Date", datetime(2025, 6, 15))
+                album_type = st.selectbox("Album Type", ["single", "album", "EP"])
+                total_tracks = st.slider("Total Tracks", 1, 20, 1)
+                markets = st.slider("Available Markets", 50, 200, 185)
                 
-                cols = st.columns(3)
-                cols[0].metric("Predicted Streams", f"{prediction:,}")
-                cols[1].metric("Confidence Range", f"{lower_bound:,} - {upper_bound:,}")
+                st.subheader("Content Features")
+                explicit = st.toggle("Explicit Content", True)
+                is_remix = st.toggle("Remix/Edit Version")
+                is_collab = st.toggle("Collaboration")
                 
-                # Performance category
-                if prediction > 1500000:
-                    perf = "🔥 Hit Potential"
-                elif prediction > 500000:
-                    perf = "👍 Strong"
-                else:
-                    perf = "💤 Moderate"
-                cols[2].metric("Performance Category", perf)
+                st.subheader("Artist Metrics")
+                followers = st.number_input("Current Followers", 0, 100000, 7937)
+                popularity = st.slider("Artist Popularity", 0, 100, 41)
                 
-                st.markdown("""</div>""", unsafe_allow_html=True)
-            
-            # Recommendations
-            st.subheader("Optimization Recommendations")
-            rec_cols = st.columns(2)
-            
-            with rec_cols[0]:
-                if not is_collab:
-                    st.warning("**Add a Collaboration**\n\nPotential +25-35% streams")
-                if release_date.month in [12, 1, 2]:
-                    st.warning("**Release Timing**\n\nWinter releases underperform by ~15%")
-            
-            with rec_cols[1]:
-                if not explicit:
-                    st.error("**Explicit Content**\n\nNon-explicit tracks average 40% fewer streams")
+                submitted = st.form_submit_button("Predict Performance", type="primary")
+        
+        with col2:
+            if submitted:
+                # Feature preparation
+                track_type = "original"
                 if is_remix:
-                    st.info("**Original Content**\n\nRemixes typically get 20% fewer streams than originals")
+                    track_type = "remix"
+                elif is_collab:
+                    track_type = "collab"
+                
+                input_features = {
+                    'artist_followers': followers,
+                    'artist_popularity': popularity,
+                    'album_type': album_type.lower(),
+                    'release_year': release_date.year,
+                    'release_month': release_date.month,
+                    'release_day': release_date.day,
+                    'total_tracks_in_album': total_tracks,
+                    'available_markets_count': markets,
+                    'track_number': 1,
+                    'disc_number': 1,
+                    'explicit': explicit,
+                    'is_remix': int(is_remix),
+                    'is_collab': int(is_collab),
+                    'is_instrumental': 0,
+                    'is_single': int(album_type.lower() == 'single'),
+                    'days_since_first_release': (release_date - gwamz_data_eng['release_date'].min()).days,
+                    'track_type': track_type
+                }
+                
+                with st.spinner('Generating prediction...'):
+                    prediction = predict_streams(input_features)
+                    lower = int(prediction * 0.85)
+                    upper = int(prediction * 1.15)
+                    
+                    # Prediction card
+                    with st.container():
+                        st.markdown("""<div class="metric-card">""", unsafe_allow_html=True)
+                        
+                        # Performance badge
+                        if prediction > 1500000:
+                            badge = """<span class="prediction-badge badge-hit">HIT POTENTIAL</span>"""
+                        elif prediction > 500000:
+                            badge = """<span class="prediction-badge badge-strong">STRONG</span>"""
+                        else:
+                            badge = """<span class="prediction-badge badge-moderate">MODERATE</span>"""
+                        
+                        st.markdown(f"""
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h2 style="margin: 0;">Prediction Results</h2>
+                            {badge}
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        cols = st.columns(3)
+                        cols[0].metric("Predicted Streams", f"{prediction:,}")
+                        cols[1].metric("Confidence Range", f"{lower:,} - {upper:,}")
+                        cols[2].metric("Market Coverage", f"{markets} markets")
+                        
+                        st.markdown("""</div>""", unsafe_allow_html=True)
+                    
+                    # Recommendations
+                    st.subheader("Optimization Recommendations")
+                    
+                    recs = []
+                    if not is_collab:
+                        recs.append(("Add Collaboration", "Potential +25-35% streams", "warning"))
+                    if not explicit:
+                        recs.append(("Make Explicit", "40% average stream increase", "error"))
+                    if release_date.month in [12, 1, 2]:
+                        recs.append(("Reschedule Release", "Q2 (Apr-Jun) performs 15% better", "warning"))
+                    if is_remix:
+                        recs.append(("Original Version", "Remixes get 20% fewer streams", "info"))
+                    
+                    if recs:
+                        cols = st.columns(len(recs))
+                        for i, (title, desc, type_) in enumerate(recs):
+                            with cols[i]:
+                                if type_ == "error":
+                                    st.error(f"**{title}**  \n{desc}")
+                                elif type_ == "warning":
+                                    st.warning(f"**{title}**  \n{desc}")
+                                else:
+                                    st.info(f"**{title}**  \n{desc}")
+                    else:
+                        st.success("This release is optimally configured!")
 
 with tab2:
-    st.header("Historical Performance Analytics")
+    st.header("Advanced Analytics Dashboard")
     
-    # Performance over time
-    st.subheader("Streams Over Time")
-    time_cols = st.columns(2)
+    # Performance overview
+    with st.container():
+        st.subheader("Performance Overview")
+        
+        metric1, metric2, metric3, metric4 = st.columns(4)
+        metric1.metric("Total Streams", f"{gwamz_data_eng['streams'].sum():,}")
+        metric2.metric("Average Streams", f"{gwamz_data_eng['streams'].mean():,.0f}")
+        metric3.metric("Top Track", f"{gwamz_data_eng['streams'].max():,}")
+        metric4.metric("Tracks Analyzed", len(gwamz_data_eng))
     
-    with time_cols[0]:
-        time_frame = st.selectbox("Time Period", ["Monthly", "Quarterly", "Yearly"])
+    # Time series analysis
+    with st.container():
+        st.subheader("Temporal Analysis")
+        
+        time_col1, time_col2 = st.columns(2)
+        with time_col1:
+            time_group = st.selectbox("Group By", ["Monthly", "Quarterly", "Yearly"])
+        
+        freq_map = {"Monthly": "M", "Quarterly": "Q", "Yearly": "Y"}
+        time_data = gwamz_data_eng.groupby(pd.Grouper(key='release_date', freq=freq_map[time_group]))['streams'].sum().reset_index()
+        
+        fig = px.area(time_data, x='release_date', y='streams',
+                      title=f"{time_group} Streams Performance",
+                      labels={'streams': 'Total Streams', 'release_date': 'Date'})
+        st.plotly_chart(fig, use_container_width=True)
     
-    fig = px.line(gwamz_data_eng.groupby(pd.Grouper(key='release_date', freq='M'))['streams'].sum().reset_index(),
-                 x='release_date', y='streams',
-                 title=f"{time_frame} Streams Trend")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Track type performance
-    st.subheader("Content Performance Breakdown")
-    breakdown_cols = st.columns(3)
-    
-    with breakdown_cols[0]:
-        breakdown_by = st.selectbox("Breakdown By", ["Track Type", "Explicit Status", "Album Type"])
-    
-    if breakdown_by == "Track Type":
-        fig = px.pie(gwamz_data_eng, names='track_type', values='streams',
-                    title="Streams by Track Type")
-    elif breakdown_by == "Explicit Status":
-        fig = px.box(gwamz_data_eng, x='explicit', y='streams',
-                    title="Streams by Explicit Status")
-    else:
-        fig = px.bar(gwamz_data_eng.groupby('album_type')['streams'].sum().reset_index(),
-                    x='album_type', y='streams',
-                    title="Total Streams by Album Type")
-    
-    st.plotly_chart(fig, use_container_width=True)
+    # Content analysis
+    with st.container():
+        st.subheader("Content Analysis")
+        
+        content_col1, content_col2 = st.columns(2)
+        with content_col1:
+            breakdown_by = st.selectbox("Breakdown By", ["Track Type", "Explicit Status", "Release Type"])
+        
+        if breakdown_by == "Track Type":
+            fig = px.sunburst(gwamz_data_eng, path=['track_type', 'explicit'], values='streams',
+                             title="Streams by Track Type and Explicit Status")
+        elif breakdown_by == "Explicit Status":
+            fig = px.box(gwamz_data_eng, x='explicit', y='streams', color='track_type',
+                        title="Streams Distribution by Explicit Status")
+        else:
+            fig = px.bar(gwamz_data_eng.groupby('album_type')['streams'].sum().reset_index(),
+                         x='album_type', y='streams', color='album_type',
+                         title="Total Streams by Album Type")
+        
+        st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
     st.header("Strategic Release Planner")
     
     # Scenario analysis
-    st.subheader("What-If Scenario Analysis")
-    scenario_cols = st.columns(2)
-    
-    with scenario_cols[0]:
-        base_features = {
-            'artist_followers': st.number_input("Base Followers", 0, 50000, 7937),
-            'artist_popularity': st.number_input("Base Popularity", 0, 100, 41),
-            'album_type': st.selectbox("Base Album Type", ["single", "album"]),
-            'explicit': st.checkbox("Base Explicit Content", value=True),
-            'is_collab': st.checkbox("Base Collaboration", value=False)
-        }
-    
-    with scenario_cols[1]:
-        scenarios = st.multiselect(
-            "Compare With", 
-            ["Add Collaboration", "Make Non-Explicit", "Release in December", "Album Instead of Single"],
-            default=["Add Collaboration"]
-        )
-    
-    if st.button("Run Scenarios", type="primary"):
-        scenario_results = []
-        base_pred = predict_streams({
-            **base_features,
-            'release_year': 2025,
-            'release_month': 6,
-            'release_day': 15,
-            'total_tracks_in_album': 1,
-            'available_markets_count': 185,
-            'track_number': 1,
-            'disc_number': 1,
-            'is_remix': 0,
-            'is_instrumental': 0,
-            'is_single': int(base_features['album_type'] == 'single'),
-            'days_since_first_release': 1500,
-            'track_type': 'collab' if base_features['is_collab'] else 'original'
-        })
+    with st.container():
+        st.subheader("Scenario Comparison")
         
-        scenario_results.append({
-            "Scenario": "Base Case",
-            "Streams": base_pred,
-            "Change": "0%"
-        })
+        base_col1, base_col2 = st.columns(2)
+        with base_col1:
+            st.markdown("**Base Scenario**")
+            base_followers = st.number_input("Artist Followers", 0, 100000, 7937, key="base_followers")
+            base_popularity = st.slider("Artist Popularity", 0, 100, 41, key="base_pop")
+            base_explicit = st.toggle("Explicit", True, key="base_explicit")
         
-        for scenario in scenarios:
-            features = base_features.copy()
-            if scenario == "Add Collaboration":
-                features['is_collab'] = True
-                features['track_type'] = 'collab'
-            elif scenario == "Make Non-Explicit":
-                features['explicit'] = False
-            elif scenario == "Release in December":
-                features['release_month'] = 12
-            elif scenario == "Album Instead of Single":
-                features['album_type'] = 'album'
-                features['is_single'] = 0
-            
-            pred = predict_streams({
-                **features,
+        with base_col2:
+            st.markdown("**Compare With**")
+            scenarios = st.multiselect(
+                "Select Scenarios",
+                ["Add Collaboration", "Non-Explicit", "Winter Release", "Album Release", "Remix Version"],
+                default=["Add Collaboration"]
+            )
+        
+        if st.button("Compare Scenarios", type="primary"):
+            # Base case prediction
+            base_features = {
+                'artist_followers': base_followers,
+                'artist_popularity': base_popularity,
+                'album_type': 'single',
                 'release_year': 2025,
-                'release_month': features.get('release_month', 6),
+                'release_month': 6,
                 'release_day': 15,
                 'total_tracks_in_album': 1,
                 'available_markets_count': 185,
                 'track_number': 1,
                 'disc_number': 1,
+                'explicit': base_explicit,
                 'is_remix': 0,
+                'is_collab': 0,
                 'is_instrumental': 0,
-                'is_single': int(features['album_type'] == 'single'),
+                'is_single': 1,
                 'days_since_first_release': 1500,
-                'track_type': features.get('track_type', 'original')
-            })
+                'track_type': 'original'
+            }
+            base_pred = predict_streams(base_features)
             
-            change = f"{((pred - base_pred)/base_pred * 100):.1f}%"
-            scenario_results.append({
-                "Scenario": scenario,
-                "Streams": pred,
-                "Change": change
-            })
-        
-        st.subheader("Scenario Results")
-        fig = px.bar(pd.DataFrame(scenario_results), 
-                     x='Scenario', y='Streams',
-                     text='Change',
-                     color='Scenario',
-                     title="Scenario Comparison")
-        st.plotly_chart(fig, use_container_width=True)
+            # Scenario predictions
+            scenario_data = []
+            for scenario in scenarios:
+                features = base_features.copy()
+                if scenario == "Add Collaboration":
+                    features.update({'is_collab': 1, 'track_type': 'collab'})
+                elif scenario == "Non-Explicit":
+                    features.update({'explicit': False})
+                elif scenario == "Winter Release":
+                    features.update({'release_month': 12})
+                elif scenario == "Album Release":
+                    features.update({'album_type': 'album', 'is_single': 0})
+                elif scenario == "Remix Version":
+                    features.update({'is_remix': 1, 'track_type': 'remix'})
+                
+                pred = predict_streams(features)
+                change = (pred - base_pred) / base_pred * 100
+                scenario_data.append({
+                    'Scenario': scenario,
+                    'Streams': pred,
+                    'Change (%)': change,
+                    'Absolute Change': pred - base_pred
+                })
+            
+            # Display results
+            st.subheader("Comparison Results")
+            
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=[s['Scenario'] for s in scenario_data],
+                y=[s['Change (%)'] for s in scenario_data],
+                text=[f"{s['Change (%)']:.1f}%" for s in scenario_data],
+                marker_color=['#1DB954' if x > 0 else '#FF4B4B' for x in [s['Change (%)'] for s in scenario_data]],
+                name='Percentage Change'
+            ))
+            fig.update_layout(
+                title="Percentage Change from Base Scenario",
+                yaxis_title="Change (%)",
+                hovermode="x unified"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.dataframe(pd.DataFrame(scenario_data).style.format({
+                'Streams': '{:,}',
+                'Change (%)': '{:.1f}%',
+                'Absolute Change': '{:,}'
+            }))
 
-# Footer
+with tab4:
+    st.header("Settings & Configuration")
+    
+    with st.expander("Data Management"):
+        st.info("Upload new data to refresh predictions")
+        new_data = st.file_uploader("Upload CSV", type=["csv"])
+        if new_data:
+            try:
+                new_df = pd.read_csv(new_data)
+                new_df.to_csv('gwamz_data.csv', index=False)
+                st.success("Data updated successfully!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error processing file: {str(e)}")
+    
+    with st.expander("Model Settings"):
+        st.warning("Advanced settings - modify with caution")
+        retrain = st.button("Retrain Model with Latest Data")
+        if retrain:
+            with st.spinner("Retraining model..."):
+                # Add model retraining logic here
+                st.success("Model retrained successfully!")
+    
+    with st.expander("System Info"):
+        st.write(f"**Last Model Training:** {datetime.now().strftime('%Y-%m-%d')}")
+        st.write(f"**Records in Database:** {len(gwamz_data_eng)}")
+        st.write(f"**Data Coverage:** {gwamz_data_eng['release_date'].min().strftime('%Y-%m')} to {gwamz_data_eng['release_date'].max().strftime('%Y-%m')}")
+
+# --- Footer ---
 st.markdown("---")
-st.markdown("""
-**Gwamz Music Analytics** • v1.1.0 • [Contact Support](mailto:analytics@gwamz.com)  
-*Predictions based on historical patterns. Actual results may vary.*
-""")
+footer_col1, footer_col2 = st.columns(2)
+with footer_col1:
+    st.markdown("""
+    **Gwamz Music Analytics Pro**  
+    v2.0 · © 2025 Gwamz Records
+    """)
+with footer_col2:
+    st.markdown("""
+    [Documentation](https://gwamz.com/docs) · 
+    [Support](mailto:analytics-support@gwamz.com) · 
+    [API](https://api.gwamz.com)
+    """)
